@@ -1,0 +1,59 @@
+name: Movies CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: movies-ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  check:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    env:
+      NEXT_TELEMETRY_DISABLED: "1"
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+          package-manager-cache: false
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run build:cloudflare
+      - run: npm run package:cloudflare
+      - name: Check the packaged Worker without deploying
+        run: npx wrangler deploy --dry-run --config release/wrangler.json
+
+  request-deployment:
+    needs: check
+    if: >-
+      github.repository == 'brarkhushpreet/movie_website' &&
+      github.event_name == 'push' &&
+      github.ref == 'refs/heads/main' &&
+      vars.AUTO_DEPLOY == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    permissions: {}
+    steps:
+      - name: Request private movies deployment
+        env:
+          GH_TOKEN: ${{ secrets.OPS_DISPATCH_TOKEN }}
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: |
+          gh api --method POST \
+            repos/brarkhushpreet/portfolio-ops/actions/workflows/deploy-movies.yml/dispatches \
+            -f ref=main \
+            -f "inputs[commit]=$SOURCE_COMMIT"
